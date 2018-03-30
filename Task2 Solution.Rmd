@@ -1,0 +1,131 @@
+---
+title: "Task2"
+author: "Arman Iskaliyev"
+date: '29 марта 2018 г '
+output: 
+  html_document:
+    keep_md: yes
+---
+
+```{r setup}
+library(readxl)
+library(tidyverse)
+library(GGally)
+library(caret)
+set.seed(44)
+```
+
+###Load and process workbook
+```{r}
+xls_wbook <- "./task2.xlsx"
+excel_sheets(xls_wbook) %>% print() -> sheet_names
+```
+
+```{r}
+train_df <- read_excel(xls_wbook, sheet = "Мошенники_train", col_types = "text")
+test_df <- read_excel(xls_wbook, sheet = "Мошенники_test", col_types = "text")
+
+read_excel(xls_wbook, sheet = 1)
+```
+
+```{r}
+train_df$F120 <- str_replace_all(train_df$F120, "\\s", "")
+test_df$F120 <- str_replace_all(test_df$F120, "\\s", "")
+test_df$F120 <- str_replace_all(test_df$F120, "СРЕПЕНЬ", "СТЕПЕНЬ")
+
+train_df$TARGET <- str_replace_all(train_df$TARGET, "0", "NO")
+train_df$TARGET <- str_replace_all(train_df$TARGET, "1", "YES")
+table(train_df$TARGET)
+
+guess_coltypes <- map_chr(train_df, guess_parser)
+
+table(guess_coltypes)
+
+train_df <- modify_at(train_df, names(keep(guess_coltypes, ~.=="integer")), as.integer)
+train_df <- modify_at(train_df, names(keep(guess_coltypes, ~.=="character")), as.character)
+train_df <- modify_at(train_df, names(keep(guess_coltypes, ~.=="double")), as.double)
+train_df <- modify_at(train_df, c("F120", "TARGET"), as.factor)
+
+test_df <- modify_at(test_df, names(keep(guess_coltypes, ~.=="integer")), as.integer)
+test_df <- modify_at(test_df, names(keep(guess_coltypes, ~.=="character")), as.character)
+test_df <- modify_at(test_df, names(keep(guess_coltypes, ~.=="double")), as.double)
+test_df <- modify_at(test_df, c("F120", "TARGET"), as.factor)
+
+glimpse(train_df)
+glimpse(test_df)
+```
+
+Drop ID column
+```{r}
+train_df$NUM <- NULL
+```
+
+Target variable has a two class so our task is Binomial Classification.
+
+Split data
+```{r}
+index_train <- createDataPartition(train_df$TARGET, p = 0.75, list = FALSE)
+
+train_x <- train_df[index_train, -131]
+train_y <- train_df[index_train,]$TARGET
+     
+test_x <- train_df[-index_train, -131]
+test_y <- train_df[-index_train,]$TARGET
+```
+
+Train model
+```{r}
+myFolds <- createFolds(train_y, k = 5)
+
+myControl <- trainControl(
+     summaryFunction = twoClassSummary,
+     classProbs = TRUE,
+     verboseIter = TRUE,
+     savePredictions = TRUE,
+     index = myFolds
+)
+```
+
+```{r}
+model_rf_file <- "./Rf_model.RData"
+if (file.exists(model_rf_file)) {
+     load(file = model_rf_file, verbose = TRUE)
+} else {
+     
+# Fit random forest: model_rf
+model_rf <- train(
+     x = train_x, y = train_y,
+     metric = "ROC",
+     method = "ranger",
+     preProcess = c("medianImpute"),
+     trControl = myControl
+)
+
+save(model_rf, file = model_rf_file)
+}
+```
+
+```{r}
+summary(model_rf)
+
+plot(model_rf)
+
+predicted <- predict(model_rf, newdata = test_x)
+confusionMatrix(predicted, test_y)
+```
+
+Predict on test_df
+```{r}
+test_df$TARGET <- predict(model_rf, newdata = test_df[, -1])
+
+```
+
+Save to file:
+```{r}
+library(xlsx)
+
+select(test_df, NUM, TARGET) %>% 
+     mutate(TARGET = ifelse(TARGET=="YES", 1, 0)) -> tmp_df
+
+write.xlsx2(x = as.data.frame(tmp_df), file = "./Task2_Predicted.xlsx", col.names = TRUE, row.names = FALSE)
+```
